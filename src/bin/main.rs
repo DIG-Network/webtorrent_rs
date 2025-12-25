@@ -1,5 +1,5 @@
-use webtorrent::{WebTorrent, WebTorrentOptions};
 use tracing_subscriber;
+use webtorrent::{WebTorrent, WebTorrentOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -22,4 +22,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

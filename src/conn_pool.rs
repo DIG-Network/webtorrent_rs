@@ -1,13 +1,13 @@
 use crate::client::WebTorrent;
 use crate::error::Result;
 use crate::protocol::Handshake;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{debug, error, info, warn};
-use hex;
-use bytes::BytesMut;
 use bytes::BufMut;
+use bytes::BytesMut;
+use hex;
+use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 
 // BitVec types used in message handling
 

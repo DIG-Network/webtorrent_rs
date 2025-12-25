@@ -100,7 +100,9 @@ pub fn parse_bencode(data: &[u8]) -> Result<(BencodeValue, usize)> {
 
 fn parse_value(data: &[u8], pos: &mut usize) -> Result<BencodeValue> {
     if *pos >= data.len() {
-        return Err(WebTorrentError::Bencode("Unexpected end of data".to_string()));
+        return Err(WebTorrentError::Bencode(
+            "Unexpected end of data".to_string(),
+        ));
     }
 
     match data[*pos] {
@@ -122,12 +124,14 @@ fn parse_integer(data: &[u8], pos: &mut usize) -> Result<BencodeValue> {
         *pos += 1;
     }
     if *pos >= data.len() {
-        return Err(WebTorrentError::Bencode("Integer not terminated".to_string()));
+        return Err(WebTorrentError::Bencode(
+            "Integer not terminated".to_string(),
+        ));
     }
     let num_str = String::from_utf8_lossy(&data[start..*pos]);
-    let num = num_str.parse::<i64>().map_err(|e| {
-        WebTorrentError::Bencode(format!("Invalid integer: {}", e))
-    })?;
+    let num = num_str
+        .parse::<i64>()
+        .map_err(|e| WebTorrentError::Bencode(format!("Invalid integer: {}", e)))?;
     *pos += 1; // skip 'e'
     Ok(BencodeValue::Integer(num))
 }
@@ -138,15 +142,19 @@ fn parse_bytes(data: &[u8], pos: &mut usize) -> Result<BencodeValue> {
         *pos += 1;
     }
     if *pos >= data.len() {
-        return Err(WebTorrentError::Bencode("Bytes length not terminated".to_string()));
+        return Err(WebTorrentError::Bencode(
+            "Bytes length not terminated".to_string(),
+        ));
     }
     let len_str = String::from_utf8_lossy(&data[start..*pos]);
-    let len = len_str.parse::<usize>().map_err(|e| {
-        WebTorrentError::Bencode(format!("Invalid bytes length: {}", e))
-    })?;
+    let len = len_str
+        .parse::<usize>()
+        .map_err(|e| WebTorrentError::Bencode(format!("Invalid bytes length: {}", e)))?;
     *pos += 1; // skip ':'
     if *pos + len > data.len() {
-        return Err(WebTorrentError::Bencode("Bytes length exceeds data".to_string()));
+        return Err(WebTorrentError::Bencode(
+            "Bytes length exceeds data".to_string(),
+        ));
     }
     let bytes = Bytes::copy_from_slice(&data[*pos..*pos + len]);
     *pos += len;
@@ -172,15 +180,20 @@ fn parse_dict(data: &[u8], pos: &mut usize) -> Result<BencodeValue> {
     while *pos < data.len() && data[*pos] != b'e' {
         let key = match parse_value(data, pos)? {
             BencodeValue::Bytes(b) => b,
-            _ => return Err(WebTorrentError::Bencode("Dictionary key must be bytes".to_string())),
+            _ => {
+                return Err(WebTorrentError::Bencode(
+                    "Dictionary key must be bytes".to_string(),
+                ))
+            }
         };
         let value = parse_value(data, pos)?;
         dict.insert(key, value);
     }
     if *pos >= data.len() {
-        return Err(WebTorrentError::Bencode("Dictionary not terminated".to_string()));
+        return Err(WebTorrentError::Bencode(
+            "Dictionary not terminated".to_string(),
+        ));
     }
     *pos += 1; // skip 'e'
     Ok(BencodeValue::Dict(dict))
 }
-

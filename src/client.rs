@@ -1,15 +1,15 @@
-use crate::error::{Result, WebTorrentError};
-use crate::torrent::Torrent;
 use crate::conn_pool::ConnPool;
 use crate::discovery::Discovery;
+use crate::error::{Result, WebTorrentError};
 use crate::nat::NatTraversal;
 use crate::throttling::ThrottleGroup;
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc};
-use tokio::time::{Duration, Instant};
+use crate::torrent::Torrent;
 use bytes::Bytes;
 use rand::Rng;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{mpsc, RwLock};
+use tokio::time::{Duration, Instant};
 
 /// WebTorrent Client Options
 #[derive(Debug, Clone)]

@@ -2,15 +2,16 @@
 // Run with: cargo run --example test_download
 // Make sure the seeder is running first: cargo run --example test_seeder_quick
 
-use webtorrent::{WebTorrent, WebTorrentOptions};
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing_subscriber;
+use webtorrent::{WebTorrent, WebTorrentOptions};
 
 const TRACKER_URL: &str = "http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000";
 // Info hash from the seeder test - update this if you change the test data
 const TEST_INFO_HASH: &str = "6ae911a1ea51a7ce62d817804287da0ef4e338f9";
-const EXPECTED_DATA: &str = "Hello, World! This is a test file seeded to the dig-relay tracker from WebTorrent Rust.";
+const EXPECTED_DATA: &str =
+    "Hello, World! This is a test file seeded to the dig-relay tracker from WebTorrent Rust.";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -64,25 +65,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[3/5] Waiting for peers and download...");
     let mut attempts = 0;
     let max_attempts = 30; // 30 seconds
-    
+
     loop {
         attempts += 1;
         sleep(Duration::from_secs(1)).await;
-        
+
         // Access ready state through the torrent's internal structure
         // Note: This is a simplified check - in production, you'd use proper accessors
         let progress = torrent.progress().await;
         let downloaded = torrent.downloaded().await;
         let num_peers = torrent.num_peers().await;
-        
-        println!("  Attempt {}/{}: Progress={:.1}%, Downloaded={} bytes, Peers={}",
-            attempts, max_attempts, progress * 100.0, downloaded, num_peers);
-        
+
+        println!(
+            "  Attempt {}/{}: Progress={:.1}%, Downloaded={} bytes, Peers={}",
+            attempts,
+            max_attempts,
+            progress * 100.0,
+            downloaded,
+            num_peers
+        );
+
         if progress >= 1.0 {
             println!("✓ Download complete!");
             break;
         }
-        
+
         if attempts >= max_attempts {
             println!("⚠ Timeout waiting for download to complete");
             println!("  Final progress: {:.1}%", progress * 100.0);
@@ -99,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Verify downloaded data
     println!("[4/5] Verifying downloaded data...");
     let progress = torrent.progress().await;
-    
+
     if progress >= 1.0 {
         // Get the downloaded data from the store
         // Note: This is a simplified check - in a real implementation,
@@ -108,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Progress: {:.1}%", progress * 100.0);
         println!("  Downloaded: {} bytes", torrent.downloaded().await);
         println!("  Expected: {} bytes", EXPECTED_DATA.len());
-        
+
         // Check if we have the data
         // In a full implementation, we would read from the store here
         println!();
@@ -119,8 +126,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Progress: {:.1}%", progress * 100.0);
         let downloaded = torrent.downloaded().await;
         let total_length = torrent.length().await;
-        println!("  Downloaded: {} bytes / {} bytes", downloaded, total_length);
-        
+        println!(
+            "  Downloaded: {} bytes / {} bytes",
+            downloaded, total_length
+        );
+
         if torrent.num_peers().await == 0 {
             println!();
             println!("⚠ No peers found. Possible issues:");
@@ -129,13 +139,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  3. Network/firewall issues");
         }
     }
-    
+
     println!();
     println!("=== Test Complete ===");
-    
+
     // Clean up
     client.destroy().await?;
-    
+
     Ok(())
 }
-

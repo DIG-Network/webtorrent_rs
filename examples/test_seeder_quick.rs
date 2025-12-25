@@ -1,14 +1,15 @@
 // Quick test: Seed to tracker for 10 seconds then exit
 // Run with: cargo run --example test_seeder_quick
 
-use webtorrent::{WebTorrent, WebTorrentOptions, TorrentCreator};
 use bytes::Bytes;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing_subscriber;
+use webtorrent::{TorrentCreator, WebTorrent, WebTorrentOptions};
 
 const TRACKER_URL: &str = "http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000";
-const TRACKER_STATS_URL: &str = "http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000/stats";
+const TRACKER_STATS_URL: &str =
+    "http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000/stats";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

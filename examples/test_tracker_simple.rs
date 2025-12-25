@@ -1,10 +1,11 @@
 // Simple test: Direct tracker announcement test
 // Run with: cargo run --example test_tracker_simple
 
-use webtorrent::tracker::TrackerClient;
 use hex;
+use webtorrent::tracker::TrackerClient;
 
-const TRACKER_URL: &str = "http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000/announce";
+const TRACKER_URL: &str =
+    "http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000/announce";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

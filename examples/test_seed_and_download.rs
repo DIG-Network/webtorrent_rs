@@ -2,14 +2,15 @@
 // This creates a seeder and a downloader to test end-to-end functionality
 // Run with: cargo run --example test_seed_and_download
 
-use webtorrent::{WebTorrent, WebTorrentOptions, TorrentCreator};
 use bytes::Bytes;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing_subscriber;
+use webtorrent::{TorrentCreator, WebTorrent, WebTorrentOptions};
 
 const TRACKER_URL: &str = "http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000";
-const EXPECTED_DATA: &str = "Hello, World! This is a test file for seed and download test from WebTorrent Rust.";
+const EXPECTED_DATA: &str =
+    "Hello, World! This is a test file for seed and download test from WebTorrent Rust.";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let test_data = Bytes::from(EXPECTED_DATA);
     let test_name = "test_seed_download.txt";
     let announce_url = format!("{}/announce", TRACKER_URL);
-    
+
     let creator = TorrentCreator::new()
         .with_announce(vec![announce_url.clone()])
         .with_comment("Test file for seed and download".to_string());
@@ -59,13 +60,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 3: Seed the torrent
     println!("[3/6] Seeding torrent...");
-    let _seeded_torrent = seeder.seed(
-        test_name.to_string(),
-        test_data.clone(),
-        Some(vec![announce_url.clone()]),
-    ).await?;
+    let _seeded_torrent = seeder
+        .seed(
+            test_name.to_string(),
+            test_data.clone(),
+            Some(vec![announce_url.clone()]),
+        )
+        .await?;
     println!("✓ Torrent seeded");
-    
+
     // Wait for seeder to announce
     sleep(Duration::from_secs(2)).await;
     println!("✓ Seeder announced to tracker");
@@ -101,23 +104,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sleep(Duration::from_secs(2)).await; // Give downloader time to announce
     let mut attempts = 0;
     let max_attempts = 30;
-    
+
     loop {
         attempts += 1;
         sleep(Duration::from_secs(1)).await;
-        
+
         let progress = download_torrent.progress().await;
         let downloaded = download_torrent.downloaded().await;
         let num_peers = download_torrent.num_peers().await;
-        
-        println!("  Attempt {}/{}: Progress={:.1}%, Downloaded={}/{} bytes, Peers={}",
-            attempts, max_attempts,
+
+        println!(
+            "  Attempt {}/{}: Progress={:.1}%, Downloaded={}/{} bytes, Peers={}",
+            attempts,
+            max_attempts,
             progress * 100.0,
             downloaded,
             download_torrent.length().await,
             num_peers
         );
-        
+
         if progress >= 1.0 {
             println!();
             println!("✓✓✓ Download complete! ✓✓✓");
@@ -125,12 +130,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Expected: {} bytes", test_data.len());
             break;
         }
-        
+
         if attempts >= max_attempts {
             println!();
             println!("⚠ Download incomplete after {} seconds", max_attempts);
             println!("  Final progress: {:.1}%", progress * 100.0);
-            println!("  Downloaded: {}/{} bytes", downloaded, download_torrent.length().await);
+            println!(
+                "  Downloaded: {}/{} bytes",
+                downloaded,
+                download_torrent.length().await
+            );
             println!("  Peers: {}", num_peers);
             if num_peers == 0 {
                 println!("  ⚠ No peers found - connection may have failed");
@@ -138,21 +147,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
     }
-    
+
     println!();
     println!("=== Test Complete ===");
     println!("Seeder and downloader should have connected through the tracker.");
     println!("If download completed, the end-to-end test was successful!");
-    
+
     // Keep running for a bit to allow connections
     println!();
     println!("Keeping clients alive for 5 more seconds...");
     sleep(Duration::from_secs(5)).await;
-    
+
     // Clean up
     seeder.destroy().await?;
     downloader.destroy().await?;
-    
+
     Ok(())
 }
-
