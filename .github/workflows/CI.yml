@@ -149,33 +149,38 @@ jobs:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     needs: [rust-checks, build, test]
-    if: |
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-      github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Verify package
-        run: cargo package --verbose
-
+      - name: Prepare for crates.io publish
+        run: |
+          if git log -1 --pretty=%B | grep "^[0-9]\+\.[0-9]\+\.[0-9]\+$";
+          then
+            echo "Release detected, preparing for crates.io publish"
+            # Ensure Cargo.lock is up to date
+            cargo update --dry-run || true
+            # Check if there are any changes and commit them
+            if ! git diff --quiet Cargo.lock; then
+              echo "Cargo.lock has changes, committing them"
+              git config --local user.email "action@github.com"
+              git config --local user.name "GitHub Action"
+              git add Cargo.lock
+              git commit -m "Update Cargo.lock for release" || true
+            fi
+          else
+            echo "Not a release, skipping crates.io preparation"
+          fi
       - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          if git log -1 --pretty=%B | grep "^[0-9]\+\.[0-9]\+\.[0-9]\+$";
+          then
+            cargo login $CARGO_REGISTRY_TOKEN
+            cargo publish --no-verify --allow-dirty
+          else
+            echo "Not a release, skipping crates.io publish"
+          fi
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 

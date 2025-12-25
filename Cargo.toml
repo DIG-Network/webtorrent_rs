@@ -1,6 +1,6 @@
 [package]
 name = "webtorrent-rs"
-version = "0.1.0"
+version = "1.0.2"
 edition = "2021"
 authors = ["WebTorrent Rust Port"]
 description = "Streaming torrent client for Rust - 1:1 port of webtorrent"
