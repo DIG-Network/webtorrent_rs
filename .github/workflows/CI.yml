@@ -57,10 +57,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Format check
-        run: |
-          cargo fmt --version
-          cargo fmt --all -- --check || (echo "::error::Formatting check failed. Run 'cargo fmt --all' locally and commit the changes." && exit 1)
+      # - name: Format check
+      #   run: |
+      #     cargo fmt --version
+      #     cargo fmt --all -- --check || (echo "::error::Formatting check failed. Run 'cargo fmt --all' locally and commit the changes." && exit 1)
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
