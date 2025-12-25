@@ -4,7 +4,7 @@ use sha1::{Sha1, Digest};
 use std::collections::HashMap;
 use crate::bencode_parser::BencodeValue;
 
-/// Create a torrent file from input data
+/// Create a torrent file from input data.
 pub struct TorrentCreator {
     piece_length: u64,
     announce: Vec<String>,
