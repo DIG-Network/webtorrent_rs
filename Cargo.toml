@@ -1,0 +1,105 @@
+[package]
+name = "webtorrent-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["WebTorrent Rust Port"]
+description = "Streaming torrent client for Rust - 1:1 port of webtorrent"
+license = "MIT"
+repository = "https://github.com/webtorrent/webtorrent-rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+
+# Networking
+libp2p = { version = "0.56", features = ["tcp", "dns", "noise", "yamux", "websocket", "kad", "mdns", "identify", "ping"] }
+# Note: WebRTC and QUIC are optional for now - can be added later if needed
+# Only stable releases are used - no prereleases (alpha/beta/rc)
+# libp2p-webrtc = "0.x"  # Will be added when stable release is available
+# libp2p-quic = "0.10"
+
+# BitTorrent protocol
+bendy = "0.3"
+sha1 = "0.10"
+sha2 = "0.10"
+base32 = "0.4"
+urlencoding = "2.1"
+
+# NAT traversal
+igd = "0.12"
+natpmp = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utilities
+bytes = "1.5"
+futures = "0.3"
+async-trait = "0.1"
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+hex = "0.4"
+rand = "0.8"
+url = "2.5"
+mime = "0.3"
+once_cell = "1.19"
+
+# HTTP client for web seeds
+reqwest = { version = "0.11", features = ["stream", "json"] }
+
+# File system
+async-fs = "1.6"
+
+# Bitfield
+bitvec = "1.0"
+
+# Streams
+futures-util = "0.3"
+
+# uTP (Micro Transport Protocol) support
+utp = "0.7"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.10"
+bytes = "1.5"
+hex = "0.4"
+
+[lib]
+name = "webtorrent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "webtorrent-cli"
+path = "src/bin/main.rs"
+
+[[example]]
+name = "seed_to_dig_relay"
+path = "examples/seed_to_dig_relay.rs"
+
+[[example]]
+name = "test_tracker_connection"
+path = "examples/test_tracker_connection.rs"
+
+[[example]]
+name = "seed_to_dig_relay_debug"
+path = "examples/seed_to_dig_relay_debug.rs"
+
+[[example]]
+name = "test_tracker_simple"
+path = "examples/test_tracker_simple.rs"
+
+[[example]]
+name = "test_seeder_quick"
+path = "examples/test_seeder_quick.rs"
+[[example]]
+name = "test_download"
+path = "examples/test_download.rs"
+[[example]]
+name = "test_seed_and_download"
+path = "examples/test_seed_and_download.rs"
+
