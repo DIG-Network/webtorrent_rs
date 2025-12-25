@@ -63,10 +63,10 @@ async fn test_seed_to_dig_relay_tracker() {
 
     // Announce as started
     match tracker.announce(0, 0, test_data.len() as u64, "started").await {
-        Ok(response) => {
+        Ok((response, peers)) => {
             println!("Successfully announced to tracker!");
             println!("Interval: {:?}", response.interval);
-            println!("Peers: {:?}", response.peers);
+            println!("Peers: {:?}", peers);
             if let Some(complete) = response.complete {
                 println!("Complete (seeders): {}", complete);
             }

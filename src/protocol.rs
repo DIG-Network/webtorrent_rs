@@ -63,9 +63,21 @@ impl Handshake {
         }
 
         let protocol = String::from_utf8_lossy(&data[1..=protocol_len]).to_string();
-        let reserved = data[protocol_len + 1..protocol_len + 9].try_into().unwrap();
-        let info_hash = data[protocol_len + 9..protocol_len + 29].try_into().unwrap();
-        let peer_id = data[protocol_len + 29..protocol_len + 49].try_into().unwrap();
+        let reserved = data[protocol_len + 1..protocol_len + 9]
+            .try_into()
+            .map_err(|_| crate::error::WebTorrentError::Protocol(
+                "Invalid reserved bytes length".to_string()
+            ))?;
+        let info_hash = data[protocol_len + 9..protocol_len + 29]
+            .try_into()
+            .map_err(|_| crate::error::WebTorrentError::Protocol(
+                "Invalid info hash length".to_string()
+            ))?;
+        let peer_id = data[protocol_len + 29..protocol_len + 49]
+            .try_into()
+            .map_err(|_| crate::error::WebTorrentError::Protocol(
+                "Invalid peer ID length".to_string()
+            ))?;
 
         Ok(Self {
             protocol,
