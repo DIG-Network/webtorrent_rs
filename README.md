@@ -1,6 +1,6 @@
 # WebTorrent Rust
 
-A Rust port of [WebTorrent](https://github.com/webtorrent/webtorrent) - a streaming torrent client for the web.
+A Rust port of [WebTorrent](https://github.com/webtorrent/webtorrent) - a streaming torrent client for the web
 
 ## ⚠️ Important Disclaimer
 
