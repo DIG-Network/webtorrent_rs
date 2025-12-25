@@ -10,7 +10,7 @@ A Rust port of [WebTorrent](https://github.com/webtorrent/webtorrent) - a stream
 - **For testing purposes only** - Use at your own risk
 - **No guarantees** - No warranties, no support, use at your own risk
 
-This port was created for experimentation and learning purposes. If you need a production-ready solution, please use the official [WebTorrent](https://github.com/webtorrent/webtorrent) JavaScript implementation.
+This port was created for experimentation and learning purposes. If you need a production-ready solution, please use the official [WebTorrent](https://github.com/webtorrent/webtorrent) JavaScript implementation
 
 ---
 
