@@ -1,14 +1,15 @@
 // Example: Seed a file to the dig-relay tracker
 // Run with: cargo run --example seed_to_dig_relay
 
-use webtorrent::{WebTorrent, WebTorrentOptions, TorrentCreator};
 use bytes::Bytes;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing_subscriber;
+use webtorrent::{TorrentCreator, WebTorrent, WebTorrentOptions};
 
 const TRACKER_URL: &str = "http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000";
-const TRACKER_STATS_URL: &str = "http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000/stats";
+const TRACKER_STATS_URL: &str =
+    "http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000/stats";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,11 +34,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Client created");
 
     // Create test file data
-    let test_data = Bytes::from("Hello, World! This is a test file seeded to the dig-relay tracker from WebTorrent Rust.");
+    let test_data = Bytes::from(
+        "Hello, World! This is a test file seeded to the dig-relay tracker from WebTorrent Rust.",
+    );
     let test_name = "test_file.txt";
 
     println!("Creating torrent...");
-    
+
     // Create torrent with dig-relay tracker
     let announce_url = format!("{}/announce", TRACKER_URL);
     let creator = TorrentCreator::new()
@@ -62,18 +65,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Announce to tracker
     use webtorrent::tracker::TrackerClient;
-    let port = client.address().await
-        .map(|(_ip, port)| port)
-        .unwrap_or(0);
-    let tracker = TrackerClient::new(
-        announce_url,
-        info_hash,
-        client.peer_id(),
-        port,
-    );
+    let port = client.address().await.map(|(_ip, port)| port).unwrap_or(0);
+    let tracker = TrackerClient::new(announce_url, info_hash, client.peer_id(), port);
 
     println!("Announcing to tracker...");
-    match tracker.announce(0, 0, test_data.len() as u64, "started").await {
+    match tracker
+        .announce(0, 0, test_data.len() as u64, "started")
+        .await
+    {
         Ok((response, _peers)) => {
             println!("✓ Successfully announced to tracker!");
             if let Some(interval) = response.interval {
@@ -95,15 +94,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Keep seeding
     println!("\nSeeding... Press Ctrl+C to stop");
-    
+
     // Periodically re-announce
     let mut interval = tokio::time::interval(Duration::from_secs(30));
     loop {
         interval.tick().await;
-        
+
         match tracker.announce(0, 0, 0, "update").await {
             Ok((response, _peers)) => {
-                println!("Re-announced: {} seeders, {} leechers",
+                println!(
+                    "Re-announced: {} seeders, {} leechers",
                     response.complete.unwrap_or(0),
                     response.incomplete.unwrap_or(0)
                 );
