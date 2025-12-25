@@ -1,0 +1,3 @@
+# Rustfmt configuration for webtorrent_rs
+edition = "2021"
+
