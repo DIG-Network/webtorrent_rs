@@ -383,7 +383,3 @@ path = "examples/test_tracker_announce_started.rs"
 name = "test_tracker_new"
 path = "examples/test_tracker_new.rs"
 
-[[example]]
-name = "test_utils"
-path = "examples/test_utils.rs"
-
