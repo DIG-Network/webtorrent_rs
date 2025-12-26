@@ -67,17 +67,21 @@ pub struct Torrent {
     #[allow(dead_code)] // Used in received() method, but linter doesn't detect
     received: Arc<RwLock<u64>>,
     #[allow(dead_code)] // Used in start_discovery() and destroy() methods, but linter doesn't detect
-    discovery: Arc<RwLock<Option<Arc<Discovery>>>>,
+    pub(crate) discovery: Arc<RwLock<Option<Arc<Discovery>>>>,
     #[allow(dead_code)] // Used in destroy() method, but linter doesn't detect
     store: Option<Arc<dyn ChunkStore>>,
     pub(crate) peers: Arc<RwLock<HashMap<String, Arc<Peer>>>>,
     pub(crate) wires: Arc<RwLock<Vec<Arc<crate::wire::Wire>>>>,
     #[allow(dead_code)]
-    selections: Arc<RwLock<Selections>>,
+    web_seeds: Arc<RwLock<HashMap<String, Arc<crate::webseed::WebSeedConn>>>>,
+    #[allow(dead_code)]
+    pub(crate) selections: Arc<RwLock<Selections>>,
     #[allow(dead_code)]
     rarity_map: Option<Arc<RarityMap>>,
     #[allow(dead_code)]
     strategy: PieceStrategy,
+    // File selection tracking: file_index -> priority (None = not selected, Some(priority))
+    selected_files: Arc<RwLock<std::collections::HashMap<usize, i32>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -134,9 +138,11 @@ impl Torrent {
             store: None,
             peers: Arc::new(RwLock::new(HashMap::new())),
             wires: Arc::new(RwLock::new(Vec::new())),
+            web_seeds: Arc::new(RwLock::new(HashMap::new())),
             selections: Arc::new(RwLock::new(Selections::new())),
             rarity_map: None,
             strategy: PieceStrategy::Sequential,
+            selected_files: Arc::new(RwLock::new(std::collections::HashMap::new())),
         })
     }
 
@@ -152,14 +158,18 @@ impl Torrent {
         }
 
         let port = *self.client.torrent_port.read().await;
-        let discovery = Arc::new(Discovery::new(
+        let dht_port = *self.client.dht_port.read().await;
+        let nat_traversal = self.client.nat_traversal.clone();
+        let discovery = Arc::new(Discovery::new_with_nat(
             self.info_hash,
             self.client.peer_id,
             self.announce.clone(),
             port,
             false, // DHT
-            false, // LSD  
-            false, // PEX
+            self.client.options.lsd && !self.private, // LSD - only for non-private torrents
+            self.client.options.ut_pex && !self.private, // PEX - only for non-private torrents
+            nat_traversal,
+            dht_port,
         ));
 
         discovery.start().await?;
@@ -174,7 +184,10 @@ impl Torrent {
         let peers_map = Arc::clone(&self.peers);
         let wires_vec = Arc::clone(&self.wires);
         let destroyed_flag = Arc::clone(&self.destroyed);
+        let private_flag = self.private;
+        let ut_pex_enabled = self.client.options.ut_pex;
         
+        // Spawn task for peer discovery
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
             loop {
@@ -224,6 +237,88 @@ impl Torrent {
             }
         });
         
+        // Spawn task for periodic PEX updates (if enabled and not private)
+        if ut_pex_enabled && !private_flag {
+            let peers_for_pex = Arc::clone(&self.peers);
+            let wires_for_pex = Arc::clone(&self.wires);
+            let destroyed_for_pex = Arc::clone(&self.destroyed);
+            
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30)); // PEX every 30 seconds
+                let mut last_peer_addrs: std::collections::HashSet<String> = std::collections::HashSet::new();
+                
+                loop {
+                    interval.tick().await;
+                    
+                    // Check if torrent is destroyed
+                    if *destroyed_for_pex.read().await {
+                        break;
+                    }
+                    
+                    // Collect current peer addresses
+                    let current_peers: Vec<(String, u16)> = {
+                        let peers = peers_for_pex.read().await;
+                        peers.values()
+                            .filter_map(|peer| {
+                                peer.addr().and_then(|addr| {
+                                    addr.split(':').next().and_then(|ip| {
+                                        addr.split(':').nth(1).and_then(|port_str| {
+                                            port_str.parse::<u16>().ok().map(|port| (ip.to_string(), port))
+                                        })
+                                    })
+                                })
+                            })
+                            .collect()
+                    };
+                    
+                    // Calculate added and dropped peers
+                    let current_addrs: std::collections::HashSet<String> = current_peers.iter()
+                        .map(|(ip, port)| format!("{}:{}", ip, port))
+                        .collect();
+                    
+                    let added: Vec<(String, u16)> = current_addrs.iter()
+                        .filter(|addr| !last_peer_addrs.contains(*addr))
+                        .filter_map(|addr| {
+                            addr.split(':').next().and_then(|ip| {
+                                addr.split(':').nth(1).and_then(|port_str| {
+                                    port_str.parse::<u16>().ok().map(|port| (ip.to_string(), port))
+                                })
+                            })
+                        })
+                        .collect();
+                    
+                    let dropped: Vec<(String, u16)> = last_peer_addrs.iter()
+                        .filter(|addr| !current_addrs.contains(*addr))
+                        .filter_map(|addr| {
+                            addr.split(':').next().and_then(|ip| {
+                                addr.split(':').nth(1).and_then(|port_str| {
+                                    port_str.parse::<u16>().ok().map(|port| (ip.to_string(), port))
+                                })
+                            })
+                        })
+                        .collect();
+                    
+                    // Update last known peers
+                    last_peer_addrs = current_addrs;
+                    
+                    // Send PEX updates to all connected wires
+                    if !added.is_empty() || !dropped.is_empty() {
+                        let wires = wires_for_pex.read().await;
+                        for wire in wires.iter() {
+                            // Enable PEX if not already enabled
+                            wire.enable_pex().await;
+                            
+                            // Send PEX update immediately
+                            if let Ok(_pex_data) = wire.send_pex_update(added.clone(), dropped.clone()).await {
+                                // PEX message is sent immediately through the wire's message channel
+                                // The message channel is set up by the connection handler
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
         Ok(())
     }
     
@@ -245,6 +340,16 @@ impl Torrent {
         if port == our_port {
             // Silently skip - this is our own listening port
             return Ok(());
+        }
+        
+        // Check blocklist before attempting connection
+        let peer_ip: std::net::IpAddr = ip.parse().map_err(|e| {
+            crate::error::WebTorrentError::Network(format!("Invalid peer IP {}: {}", ip, e))
+        })?;
+        
+        if client.blocklist.is_blocked(peer_ip).await {
+            tracing::debug!("Blocked outgoing connection to {}:{} (blocklisted)", ip, port);
+            return Ok(()); // Silently skip blocked IPs
         }
         
         // For local testing: if the port matches common test ports, try localhost first
@@ -335,7 +440,8 @@ impl Torrent {
         }
         
         // Create peer and wire
-        let _peer = Arc::new(Peer::new(peer_id.clone(), crate::peer::PeerType::TcpOutgoing));
+        let peer_addr = format!("{}:{}", ip, port);
+        let _peer = Arc::new(Peer::new(peer_id.clone(), crate::peer::PeerType::TcpOutgoing).with_addr(peer_addr.clone()));
         let wire = Arc::new(crate::wire::Wire::new("tcp".to_string()));
         
         // Add to torrent
@@ -355,11 +461,13 @@ impl Torrent {
             let client_clone = Arc::clone(&client);
             tokio::spawn(async move {
                 use crate::conn_pool::ConnPool;
+                // Split stream into reader and writer - handle_peer_connection only needs the reader
+                let (reader, _writer) = tokio::io::split(stream);
                 if let Err(e) = ConnPool::handle_peer_connection(
                     client_clone,
                     torrent,
                     wire,
-                    stream,
+                    reader,
                     addr,
                 ).await {
                     tracing::error!("Error handling outbound peer connection to {}: {}", addr, e);
@@ -397,11 +505,26 @@ impl Torrent {
                 use crate::magnet::MagnetUri;
                 let magnet = MagnetUri::parse(&uri)?;
                 
-                // For magnet URIs, we only have the info hash initially
-                // Metadata will be fetched via DHT/tracker using ut_metadata extension
-                // For now, return error indicating metadata is needed
+                // For magnet URIs, we need to fetch metadata via ut_metadata extension
+                // This is a two-step process:
+                // 1. Create a temporary torrent with just the info hash
+                // 2. Start discovery and fetch metadata from peers
+                // 3. Once metadata is fetched, parse it and return the full torrent info
+                
+                // For now, return an error indicating that metadata fetching is in progress
+                // The actual metadata fetching will happen after the torrent is created
+                // and discovery starts. The torrent will be updated once metadata is received.
+                // 
+                // This is a placeholder implementation - full implementation would:
+                // 1. Start discovery immediately
+                // 2. Connect to peers
+                // 3. Request metadata pieces via ut_metadata extension
+                // 4. Reconstruct full metadata from pieces
+                // 5. Parse metadata and update torrent
+                
+                // Return minimal torrent info - metadata will be fetched asynchronously
                 return Err(WebTorrentError::InvalidTorrent(
-                    format!("Magnet URI parsed successfully. Info hash: {}. Metadata fetching via ut_metadata extension will be implemented in discovery module.", hex::encode(magnet.info_hash)),
+                    format!("Magnet URI support: Info hash {} parsed. Metadata fetching via ut_metadata extension will be implemented asynchronously after torrent creation and peer discovery.", hex::encode(magnet.info_hash)),
                 ));
             }
             TorrentId::TorrentFile(data) => {
@@ -635,6 +758,205 @@ impl Torrent {
 
     pub fn files(&self) -> &[File] {
         &self.files
+    }
+
+    pub async fn piece_length(&self) -> u64 {
+        self.piece_length
+    }
+
+    pub fn piece_hashes(&self) -> &[[u8; 20]] {
+        &self.piece_hashes
+    }
+
+    pub fn is_private(&self) -> bool {
+        self.private
+    }
+
+    /// Get the store (if available)
+    pub fn store(&self) -> Option<Arc<dyn ChunkStore>> {
+        self.store.clone()
+    }
+
+    /// Select a file for download (BEP 53)
+    /// Returns true if the file was successfully selected
+    pub async fn select(&self, file_index: usize, priority: i32) -> Result<bool> {
+        if *self.destroyed.read().await {
+            return Err(WebTorrentError::InvalidTorrent("Torrent destroyed".to_string()));
+        }
+
+        let files = self.files();
+        if file_index >= files.len() {
+            return Err(WebTorrentError::InvalidTorrent(
+                format!("File index {} out of range", file_index)
+            ));
+        }
+
+        let file = &files[file_index];
+        let piece_length = self.piece_length;
+        let start_piece = file.start_piece(piece_length);
+        let end_piece = file.end_piece(piece_length);
+
+        // Add to selected files
+        {
+            let mut selected = self.selected_files.write().await;
+            selected.insert(file_index, priority);
+        }
+
+        // Add selection to piece selections
+        {
+            let mut selections = self.selections.write().await;
+            let selection = crate::selections::Selection::new(
+                start_piece,
+                end_piece,
+                priority,
+                false, // Not a stream selection
+            );
+            selections.insert(selection);
+        }
+
+        Ok(true)
+    }
+
+    /// Deselect a file (stop downloading it)
+    /// Returns true if the file was successfully deselected
+    pub async fn deselect(&self, file_index: usize) -> Result<bool> {
+        if *self.destroyed.read().await {
+            return Err(WebTorrentError::InvalidTorrent("Torrent destroyed".to_string()));
+        }
+
+        let files = self.files();
+        if file_index >= files.len() {
+            return Err(WebTorrentError::InvalidTorrent(
+                format!("File index {} out of range", file_index)
+            ));
+        }
+
+        let file = &files[file_index];
+        let piece_length = self.piece_length;
+        let start_piece = file.start_piece(piece_length);
+        let end_piece = file.end_piece(piece_length);
+
+        // Remove from selected files
+        {
+            let mut selected = self.selected_files.write().await;
+            selected.remove(&file_index);
+        }
+
+        // Remove selection from piece selections
+        {
+            let mut selections = self.selections.write().await;
+            selections.remove(start_piece, end_piece, false);
+        }
+
+        Ok(true)
+    }
+
+    /// Mark a file as critical (high priority download)
+    /// This is equivalent to select() with a high priority
+    pub async fn critical(&self, file_index: usize) -> Result<bool> {
+        // Critical files get priority 7 (highest)
+        self.select(file_index, 7).await
+    }
+
+    /// Check if a file is selected
+    pub async fn is_file_selected(&self, file_index: usize) -> bool {
+        let selected = self.selected_files.read().await;
+        selected.contains_key(&file_index)
+    }
+
+    /// Get the priority of a selected file
+    pub async fn get_file_priority(&self, file_index: usize) -> Option<i32> {
+        let selected = self.selected_files.read().await;
+        selected.get(&file_index).copied()
+    }
+
+    /// Get all selected file indices
+    pub async fn get_selected_files(&self) -> Vec<usize> {
+        let selected = self.selected_files.read().await;
+        selected.keys().copied().collect()
+    }
+
+    /// Create a read stream for a file (for streaming playback)
+    /// This enables sequential piece selection and buffering for media files
+    /// Note: This requires the torrent to be wrapped in Arc
+    pub fn create_read_stream(self: &Arc<Self>, file_index: usize) -> Result<crate::streaming::TorrentReadStream> {
+        crate::streaming::TorrentReadStream::new(Arc::clone(self), file_index)
+    }
+
+    /// Add a web seed to the torrent
+    pub async fn add_web_seed(&self, url_or_conn: String) -> Result<()> {
+        if *self.destroyed.read().await {
+            return Err(WebTorrentError::InvalidTorrent("Torrent destroyed".to_string()));
+        }
+
+        let id = url_or_conn.clone();
+
+        // Validate URL format
+        if !id.starts_with("http://") && !id.starts_with("https://") {
+            tracing::warn!("Ignoring invalid web seed: {}", id);
+            return Err(WebTorrentError::InvalidTorrent(
+                format!("Invalid web seed URL: {}", id)
+            ));
+        }
+
+        // Check for duplicates
+        {
+            let peers = self.peers.read().await;
+            if peers.contains_key(&id) {
+                tracing::warn!("Ignoring duplicate web seed: {}", id);
+                return Err(WebTorrentError::InvalidTorrent(
+                    format!("Duplicate web seed: {}", id)
+                ));
+            }
+        }
+
+        tracing::debug!("Adding web seed: {}", id);
+
+        // Prepare file metadata for web seed
+        let files_meta: Vec<(String, u64, u64)> = self
+            .files
+            .iter()
+            .map(|f| (f.path().to_string(), f.length(), f.offset()))
+            .collect();
+
+        // Create web seed connection
+        let web_seed_conn = Arc::new(crate::webseed::WebSeedConn::new(
+            id.clone(),
+            self.piece_length,
+            files_meta,
+        )?);
+
+        // Initialize web seed (set bitfield)
+        let num_pieces = self.piece_hashes.len();
+        web_seed_conn.init(num_pieces).await?;
+
+        // Store web seed connection
+        {
+            let mut web_seeds = self.web_seeds.write().await;
+            web_seeds.insert(id.clone(), Arc::clone(&web_seed_conn));
+        }
+
+        // Create peer for web seed
+        let peer = Arc::new(Peer::new(id.clone(), crate::peer::PeerType::WebSeed));
+        let wire = web_seed_conn.wire();
+
+        // Add peer and wire to torrent
+        {
+            let mut peers = self.peers.write().await;
+            peers.insert(id.clone(), Arc::clone(&peer));
+        }
+        {
+            let mut wires = self.wires.write().await;
+            wires.push(Arc::clone(&wire));
+        }
+
+        // Web seeds are always unchoked and interested
+        wire.set_peer_choking(false).await;
+        wire.set_peer_interested(true).await;
+        wire.unchoke().await;
+        wire.interested().await;
+
+        Ok(())
     }
 
     pub async fn destroy(&self) -> Result<()> {

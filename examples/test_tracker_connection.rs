@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     println!("\n✓ Tracker connection test completed successfully!");
+    println!("=== test_tracker_connection PASSED ===");
     Ok(())
 }
 

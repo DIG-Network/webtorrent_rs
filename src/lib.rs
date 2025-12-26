@@ -22,14 +22,20 @@ pub mod dht;
 pub mod throttling;
 pub mod extensions;
 pub mod torrent_creator;
+pub mod webseed;
+pub mod blocklist;
+pub mod lsd;
+pub mod streaming;
+pub mod webrtc;
 
 // Re-export for easier use
 pub use bencode_parser::{parse_bencode, BencodeValue};
 pub use magnet::MagnetUri;
 pub use throttling::ThrottleGroup;
 pub use extensions::{UtMetadata, UtPex, ExtensionProtocol};
+pub use blocklist::Blocklist;
 
-pub use client::{WebTorrent, WebTorrentOptions, TorrentId};
+pub use client::{WebTorrent, WebTorrentOptions, TorrentId, TrackerConfig};
 pub use torrent::Torrent;
 pub use error::{WebTorrentError, Result};
 pub use selections::{Selections, Selection};
@@ -40,6 +46,8 @@ pub use store::{ChunkStore, MemoryChunkStore};
 pub use protocol::{Handshake, MessageType};
 pub use torrent_creator::TorrentCreator;
 pub use nat::NatTraversal;
+pub use streaming::TorrentReadStream;
+pub use webrtc::{WebRtcManager, WebRtcConnection};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

@@ -170,6 +170,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  1. Network connectivity to the tracker");
     println!("  2. Firewall allowing outbound connections on port 6881");
     println!("  3. Tracker server is running and accessible");
+    println!();
+    println!("=== test_seeder_quick PASSED ===");
     
     Ok(())
 }

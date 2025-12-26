@@ -21,10 +21,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Create a test peer ID (20 bytes) - WebTorrent format
     let mut peer_id = [0u8; 20];
-    peer_id[0..4].copy_from_slice(b"-WW");
-    peer_id[4..8].copy_from_slice(b"0100");
-    peer_id[8] = b'-';
-    // Rest are random
+    peer_id[0..3].copy_from_slice(b"-WW");
+    peer_id[3..7].copy_from_slice(b"0100");
+    peer_id[7] = b'-';
+    // Rest are zeros for testing
     
     let port = 6881;
     
@@ -92,6 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!();
             println!("✓ Check the stats page: http://dig-relay-prod.eba-2cmanxbe.us-east-1.elasticbeanstalk.com:8000/stats");
+            println!("=== test_tracker_simple PASSED ===");
         }
         Err(e) => {
             eprintln!("✗ FAILED to connect to tracker");
@@ -107,7 +108,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    println!("✓ Test completed successfully!");
     Ok(())
 }
 

@@ -1,3 +1,4 @@
+use crate::blocklist::Blocklist;
 use crate::conn_pool::ConnPool;
 use crate::discovery::Discovery;
 use crate::error::{Result, WebTorrentError};
@@ -101,6 +102,8 @@ pub struct WebTorrent {
     // Throttling
     download_throttle: Arc<ThrottleGroup>,
     upload_throttle: Arc<ThrottleGroup>,
+    // Blocklist
+    pub(crate) blocklist: Arc<Blocklist>,
 }
 
 /// Speed tracker using a rolling window
@@ -222,6 +225,28 @@ impl WebTorrent {
             options.upload_limit.is_some(),
         ));
 
+        // Initialize blocklist
+        let blocklist = Arc::new(Blocklist::new());
+        
+        // Load blocklist if provided
+        if let Some(ref blocklist_source) = options.blocklist {
+            if blocklist_source.starts_with("http://") || blocklist_source.starts_with("https://") {
+                // Load from URL
+                if let Err(e) = blocklist.load_from_url(blocklist_source).await {
+                    tracing::warn!("Failed to load blocklist from URL {}: {}", blocklist_source, e);
+                } else {
+                    tracing::info!("Loaded blocklist from URL: {}", blocklist_source);
+                }
+            } else {
+                // Load from file
+                if let Err(e) = blocklist.load_from_file(blocklist_source).await {
+                    tracing::warn!("Failed to load blocklist from file {}: {}", blocklist_source, e);
+                } else {
+                    tracing::info!("Loaded blocklist from file: {}", blocklist_source);
+                }
+            }
+        }
+
         let mut client = Self {
             peer_id,
             node_id,
@@ -241,6 +266,7 @@ impl WebTorrent {
             upload_speed_tracker,
             download_throttle,
             upload_throttle,
+            blocklist,
         };
 
         // Initialize NAT traversal if enabled
@@ -540,6 +566,7 @@ impl Clone for WebTorrent {
             upload_speed_tracker: Arc::clone(&self.upload_speed_tracker),
             download_throttle: Arc::clone(&self.download_throttle),
             upload_throttle: Arc::clone(&self.upload_throttle),
+            blocklist: Arc::clone(&self.blocklist),
         }
     }
 }

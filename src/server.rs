@@ -106,6 +106,22 @@ impl Server {
         let method = parts[0];
         let path = parts[1];
 
+        // Handle OPTIONS request (CORS preflight)
+        if method == "OPTIONS" {
+            return Self::send_cors_preflight_response(&mut stream).await;
+        }
+
+        // Parse headers
+        let mut range_header: Option<String> = None;
+        for line in lines.iter().skip(1) {
+            if line.is_empty() {
+                break; // End of headers
+            }
+            if line.to_lowercase().starts_with("range:") {
+                range_header = Some(line[6..].trim().to_string());
+            }
+        }
+
         if method != "GET" && method != "HEAD" {
             return Self::send_error_response(&mut stream, 405, "Method Not Allowed").await;
         }
@@ -147,8 +163,7 @@ impl Server {
                 return Self::send_error_response(&mut stream, 404, "File not found").await;
             }
 
-            let _file = &files[file_index];
-            Self::serve_file(&mut stream, torrent.clone(), file_index, method == "HEAD").await?;
+            Self::serve_file(&mut stream, torrent.clone(), file_index, method == "HEAD", range_header).await?;
         } else {
             // Serve torrent metadata or list files
             Self::serve_torrent_info(&mut stream, torrent.clone(), method == "HEAD").await?;
@@ -190,6 +205,8 @@ impl Server {
             "HTTP/1.1 200 OK\r\n\
              Content-Type: text/html; charset=utf-8\r\n\
              Content-Length: {}\r\n\
+             Access-Control-Allow-Origin: *\r\n\
+             Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n\
              \r\n",
             html.len()
         );
@@ -212,6 +229,7 @@ impl Server {
         torrent: Arc<Torrent>,
         file_index: usize,
         is_head: bool,
+        range_header: Option<String>,
     ) -> Result<()> {
         let files = torrent.files();
         if file_index >= files.len() {
@@ -220,34 +238,201 @@ impl Server {
 
         let file = &files[file_index];
         let file_name = file.path();
-        let _file_length = file.length();
         let file_length = file.length();
+        let file_offset = file.offset();
+        let piece_length = torrent.piece_length().await;
 
-        // For now, send a simple response
-        // In a full implementation, we would:
-        // 1. Read the file data from the store
-        // 2. Handle range requests (HTTP 206 Partial Content)
-        // 3. Stream the data efficiently
+        // Determine MIME type from file extension
+        let content_type = Self::get_mime_type(file_name);
 
-        let response = format!(
-            "HTTP/1.1 200 OK\r\n\
-             Content-Type: application/octet-stream\r\n\
-             Content-Length: {}\r\n\
-             Content-Disposition: attachment; filename=\"{}\"\r\n\
-             \r\n",
-            file_length,
-            file_name
-        );
+        // Parse range header if present
+        let (range_start, range_end) = if let Some(ref range) = range_header {
+            Self::parse_range_header(range, file_length)?
+        } else {
+            (0, file_length)
+        };
 
+        // Validate range
+        if range_start >= file_length || range_end > file_length || range_start > range_end {
+            return Self::send_error_response(stream, 416, "Range Not Satisfiable").await;
+        }
+
+        let content_length = range_end - range_start;
+        let is_partial = range_header.is_some();
+
+        // Build response headers
+        let mut headers = Vec::new();
+        
+        if is_partial {
+            headers.push(format!("HTTP/1.1 206 Partial Content\r\n"));
+            headers.push(format!("Content-Range: bytes {}-{}/{}\r\n", range_start, range_end - 1, file_length));
+        } else {
+            headers.push(format!("HTTP/1.1 200 OK\r\n"));
+        }
+        
+        headers.push(format!("Content-Type: {}\r\n", content_type));
+        headers.push(format!("Content-Length: {}\r\n", content_length));
+        headers.push(format!("Accept-Ranges: bytes\r\n"));
+        headers.push(format!("Content-Disposition: inline; filename=\"{}\"\r\n", 
+            file_name.replace('"', "\\\"")));
+        
+        // CORS headers
+        headers.push(format!("Access-Control-Allow-Origin: *\r\n"));
+        headers.push(format!("Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n"));
+        headers.push(format!("Access-Control-Allow-Headers: Range\r\n"));
+        headers.push(format!("Access-Control-Expose-Headers: Content-Range, Accept-Ranges\r\n"));
+        
+        headers.push(format!("\r\n"));
+
+        let response = headers.join("");
         stream.write_all(response.as_bytes()).await.map_err(|e| {
             WebTorrentError::Network(format!("Failed to write HTTP response: {}", e))
         })?;
 
         if !is_head {
-            // TODO: Stream file data from store
-            // For now, we just send the headers
-            warn!("File serving not fully implemented - would stream {} bytes", file_length);
+            // Stream file data from store
+            if let Some(store) = torrent.store() {
+                Self::stream_file_data(stream, &store, torrent.clone(), file_index, file_offset, 
+                    piece_length, range_start, content_length).await?;
+            } else {
+                warn!("No store available for torrent - cannot serve file data");
+            }
         }
+
+        Ok(())
+    }
+
+    /// Parse Range header (e.g., "bytes=0-1023" or "bytes=1024-")
+    fn parse_range_header(range: &str, file_length: u64) -> Result<(u64, u64)> {
+        // Format: "bytes=start-end" or "bytes=start-"
+        if !range.starts_with("bytes=") {
+            return Err(WebTorrentError::InvalidTorrent("Invalid range format".to_string()));
+        }
+
+        let range_spec = &range[6..]; // Skip "bytes="
+        let parts: Vec<&str> = range_spec.split('-').collect();
+        
+        if parts.len() != 2 {
+            return Err(WebTorrentError::InvalidTorrent("Invalid range format".to_string()));
+        }
+
+        let start_str = parts[0];
+        let end_str = parts[1];
+
+        let start = if start_str.is_empty() {
+            0
+        } else {
+            start_str.parse::<u64>().map_err(|_| {
+                WebTorrentError::InvalidTorrent("Invalid range start".to_string())
+            })?
+        };
+
+        let end = if end_str.is_empty() {
+            file_length
+        } else {
+            end_str.parse::<u64>().map_err(|_| {
+                WebTorrentError::InvalidTorrent("Invalid range end".to_string())
+            })?
+        };
+
+        Ok((start, end.min(file_length)))
+    }
+
+    /// Get MIME type from file extension
+    fn get_mime_type(file_name: &str) -> &'static str {
+        let ext = file_name.split('.').last().unwrap_or("").to_lowercase();
+        match ext.as_str() {
+            "html" | "htm" => "text/html",
+            "css" => "text/css",
+            "js" => "application/javascript",
+            "json" => "application/json",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "svg" => "image/svg+xml",
+            "webp" => "image/webp",
+            "mp4" => "video/mp4",
+            "webm" => "video/webm",
+            "mp3" => "audio/mpeg",
+            "ogg" => "audio/ogg",
+            "wav" => "audio/wav",
+            "pdf" => "application/pdf",
+            "zip" => "application/zip",
+            "txt" => "text/plain",
+            _ => "application/octet-stream",
+        }
+    }
+
+    /// Stream file data from the store
+    async fn stream_file_data(
+        stream: &mut TcpStream,
+        store: &Arc<dyn crate::store::ChunkStore>,
+        torrent: Arc<Torrent>,
+        file_index: usize,
+        file_offset: u64,
+        piece_length: u64,
+        range_start: u64,
+        content_length: u64,
+    ) -> Result<()> {
+        let files = torrent.files();
+        let file = &files[file_index];
+        let file_start_piece = file.start_piece(piece_length);
+        let file_end_piece = file.end_piece(piece_length);
+
+        // Calculate which pieces we need
+        let range_end = range_start + content_length;
+        let start_piece = ((file_offset + range_start) / piece_length) as usize;
+        let end_piece = ((file_offset + range_end - 1) / piece_length) as usize;
+
+        let start_piece = start_piece.max(file_start_piece);
+        let end_piece = end_piece.min(file_end_piece);
+
+        // Stream data piece by piece
+        let mut bytes_written = 0u64;
+        for piece_index in start_piece..=end_piece {
+            let piece_start_in_file = (piece_index as u64 * piece_length).saturating_sub(file_offset);
+            let piece_end_in_file = ((piece_index as u64 + 1) * piece_length).saturating_sub(file_offset).min(file.length());
+
+            // Calculate what part of this piece we need
+            let piece_range_start = range_start.max(piece_start_in_file) - piece_start_in_file;
+            let piece_range_end = range_end.min(piece_end_in_file) - piece_start_in_file;
+
+            if piece_range_start < piece_range_end {
+                // Get piece data from store
+                let piece_offset = piece_range_start as usize;
+                let piece_length_to_read = (piece_range_end - piece_range_start) as usize;
+
+                match store.get(piece_index, piece_offset, piece_length_to_read).await {
+                    Ok(data) => {
+                        // Write data to stream
+                        stream.write_all(&data).await.map_err(|e| {
+                            WebTorrentError::Network(format!("Failed to write file data: {}", e))
+                        })?;
+                        bytes_written += data.len() as u64;
+                    }
+                    Err(e) => {
+                        warn!("Failed to get piece {} from store: {}", piece_index, e);
+                        // Continue with next piece
+                    }
+                }
+            }
+        }
+
+        debug!("Streamed {} bytes for file {}", bytes_written, file_index);
+        Ok(())
+    }
+
+    async fn send_cors_preflight_response(stream: &mut TcpStream) -> Result<()> {
+        let response = "HTTP/1.1 204 No Content\r\n\
+             Access-Control-Allow-Origin: *\r\n\
+             Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n\
+             Access-Control-Allow-Headers: Range\r\n\
+             Access-Control-Max-Age: 86400\r\n\
+             \r\n";
+
+        stream.write_all(response.as_bytes()).await.map_err(|e| {
+            WebTorrentError::Network(format!("Failed to write CORS preflight response: {}", e))
+        })?;
 
         Ok(())
     }
@@ -261,6 +446,7 @@ impl Server {
             "HTTP/1.1 {} {}\r\n\
              Content-Type: text/plain\r\n\
              Content-Length: {}\r\n\
+             Access-Control-Allow-Origin: *\r\n\
              \r\n\
              {}",
             status_code,

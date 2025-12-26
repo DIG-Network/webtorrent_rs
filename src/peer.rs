@@ -49,6 +49,19 @@ impl Peer {
         }
     }
 
+    pub fn with_addr(mut self, addr: String) -> Self {
+        self.addr = Some(addr);
+        self
+    }
+
+    pub fn addr(&self) -> Option<&str> {
+        self.addr.as_deref()
+    }
+
+    pub fn set_addr(&mut self, addr: String) {
+        self.addr = Some(addr);
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }

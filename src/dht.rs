@@ -1,21 +1,30 @@
 use crate::error::{Result, WebTorrentError};
 use libp2p::{
     kad::{Behaviour as KadBehaviour, QueryId, RecordKey, store::MemoryStore},
-    PeerId,
+    PeerId, Transport,
 };
 use libp2p::kad::Record;
 use libp2p::identity::Keypair;
+use libp2p::core::upgrade;
+use libp2p::swarm::SwarmEvent;
+use libp2p::noise;
+use libp2p::yamux;
+use libp2p::tcp;
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
-use tokio::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Commands to send to the DHT Swarm task
 #[derive(Debug)]
 enum DhtCommand {
-    Announce,
-    Lookup,
+    Announce {
+        response_tx: mpsc::UnboundedSender<DhtResponse>,
+    },
+    Lookup {
+        response_tx: mpsc::UnboundedSender<DhtResponse>,
+    },
     Shutdown,
 }
 
@@ -24,7 +33,6 @@ enum DhtCommand {
 enum DhtResponse {
     AnnounceComplete,
     LookupComplete(Vec<(String, u16)>),
-    #[allow(dead_code)]
     Error(String),
 }
 
@@ -41,7 +49,7 @@ pub struct Dht {
     event_tx: Option<mpsc::UnboundedSender<DhtEvent>>,
     event_rx: Arc<RwLock<Option<mpsc::UnboundedReceiver<DhtEvent>>>>,
     // Channel to send commands to the Swarm task
-    command_tx: Arc<RwLock<Option<mpsc::UnboundedSender<(DhtCommand, mpsc::UnboundedSender<DhtResponse>)>>>>,
+    command_tx: Arc<RwLock<Option<mpsc::UnboundedSender<DhtCommand>>>>,
     // Handle to the Swarm task (for cleanup)
     swarm_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     local_peer_id: Arc<RwLock<Option<PeerId>>>,
@@ -61,7 +69,6 @@ impl Dht {
     /// Create a new DHT instance
     pub fn new(info_hash: [u8; 20], peer_id: [u8; 20], port: u16) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let (command_tx, _command_rx) = mpsc::unbounded_channel();
         Self {
             info_hash,
             peer_id,
@@ -71,7 +78,7 @@ impl Dht {
             destroyed: Arc::new(RwLock::new(false)),
             event_tx: Some(tx),
             event_rx: Arc::new(RwLock::new(Some(rx))),
-            command_tx: Arc::new(RwLock::new(Some(command_tx))),
+            command_tx: Arc::new(RwLock::new(None)),
             swarm_task: Arc::new(RwLock::new(None)),
             local_peer_id: Arc::new(RwLock::new(None)),
             query_id_to_info_hash: Arc::new(RwLock::new(HashMap::new())),
@@ -90,9 +97,6 @@ impl Dht {
         // Create channels for communication with the Swarm task
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         
-        // Store command sender
-        *self.command_tx.write().await = Some(command_tx);
-        
         // Create a keypair for this peer
         let keypair = Keypair::generate_ed25519();
         let peer_id = PeerId::from(keypair.public());
@@ -108,6 +112,11 @@ impl Dht {
         let event_tx_clone = self.event_tx.clone();
         let discovered_peers_clone = Arc::clone(&self.discovered_peers);
         let query_id_to_info_hash_clone = Arc::clone(&self.query_id_to_info_hash);
+        let query_id_to_response_clone = Arc::new(RwLock::new(HashMap::<QueryId, mpsc::UnboundedSender<DhtResponse>>::new()));
+        let query_id_to_response_clone_for_swarm = Arc::clone(&query_id_to_response_clone);
+        
+        // Store command sender before spawning task
+        *self.command_tx.write().await = Some(command_tx.clone());
         
         // Spawn the Swarm task - this will own the Swarm (which is not Send)
         // The Swarm will be created inside this task
@@ -122,6 +131,7 @@ impl Dht {
                 event_tx_clone,
                 discovered_peers_clone,
                 query_id_to_info_hash_clone,
+                query_id_to_response_clone_for_swarm,
             ).await;
         });
         
@@ -136,15 +146,19 @@ impl Dht {
     /// This runs in a separate task to avoid Send/Sync issues
     async fn swarm_task(
         peer_id: PeerId,
-        _port: u16,
-        _info_hash: [u8; 20],
+        port: u16,
+        info_hash: [u8; 20],
         _peer_id_bytes: [u8; 20],
-        mut command_rx: mpsc::UnboundedReceiver<(DhtCommand, mpsc::UnboundedSender<DhtResponse>)>,
+        mut command_rx: mpsc::UnboundedReceiver<DhtCommand>,
         destroyed: Arc<RwLock<bool>>,
-        _event_tx: Option<mpsc::UnboundedSender<DhtEvent>>,
+        event_tx: Option<mpsc::UnboundedSender<DhtEvent>>,
         discovered_peers: Arc<RwLock<Vec<(String, u16)>>>,
-        _query_id_to_info_hash: Arc<RwLock<HashMap<QueryId, [u8; 20]>>>,
+        query_id_to_info_hash: Arc<RwLock<HashMap<QueryId, [u8; 20]>>>,
+        query_id_to_response: Arc<RwLock<HashMap<QueryId, mpsc::UnboundedSender<DhtResponse>>>>,
     ) {
+        // Create a keypair for transport encryption
+        let keypair = Keypair::generate_ed25519();
+        
         // Create a Kademlia DHT with in-memory record store
         let store = MemoryStore::new(peer_id);
         let mut kademlia = KadBehaviour::new(peer_id, store);
@@ -152,45 +166,220 @@ impl Dht {
         // Set Kademlia mode to server (so we can store records)
         kademlia.set_mode(Some(libp2p::kad::Mode::Server));
         
-        // Create the Swarm - this is not Send, so it must stay in this task
-        // Note: This needs the correct libp2p 0.56 API
-        // For now, we'll create a placeholder that can be updated
-        // TODO: Create Swarm using correct libp2p 0.56 API with transport
-        // let mut swarm = SwarmBuilder::new(...).build();
+        // Create transport: TCP with Noise encryption and Yamux multiplexing
+        // libp2p 0.56 API: Use tcp::Transport (tokio feature provides async support)
+        // Create transport - libp2p 0.56 API (explicitly use Tokio provider)
+        let transport = tcp::tokio::Transport::default()
+         .upgrade(upgrade::Version::V1)
+         .authenticate(noise::Config::new(&keypair).unwrap())
+         .multiplex(yamux::Config::default())
+         .boxed();
         
-        // For now, we'll use a simplified approach where we just handle commands
-        // The actual Swarm creation will be implemented when we have the correct API
+        // Create Swarm - libp2p 0.56.0 API
+        // Swarm::new() requires transport, behaviour, peer_id, and config
+        // Reference: https://docs.rs/libp2p/0.56.0/libp2p/swarm/struct.Swarm.html
+        use libp2p::swarm::{Swarm, Config};
+        use futures::executor::ThreadPool;
+        let thread_pool = ThreadPool::new().unwrap();
+        let config = Config::with_executor(thread_pool);
+        let mut swarm = Swarm::new(transport, kademlia, peer_id, config);
         
-        // Main loop: handle commands
+        // Bootstrap nodes for DHT (BitTorrent DHT bootstrap nodes)
+        let bootstrap_nodes = vec![
+            "/ip4/67.215.246.10/tcp/6881",
+            "/ip4/87.98.162.88/tcp/6881",
+            "/ip4/82.221.103.244/tcp/6881",
+        ];
+        
+        for addr_str in bootstrap_nodes {
+            if let Ok(addr) = addr_str.parse::<libp2p::core::Multiaddr>() {
+                if let Err(e) = swarm.dial(addr) {
+                    debug!("Failed to dial bootstrap node {}: {}", addr_str, e);
+                }
+            }
+        }
+        
+        // Listen on the specified port (or random if 0)
+        let listen_addr = if port > 0 {
+            format!("/ip4/0.0.0.0/tcp/{}", port)
+        } else {
+            "/ip4/0.0.0.0/tcp/0".to_string()
+        };
+        
+        if let Ok(addr) = listen_addr.parse() {
+            if let Err(e) = swarm.listen_on(addr) {
+                warn!("Failed to listen on {}: {}", listen_addr, e);
+            } else {
+                info!("DHT listening on {}", listen_addr);
+            }
+        }
+        
+        // Main loop: handle commands and Swarm events
         loop {
             // Check if destroyed
             if *destroyed.read().await {
                 break;
             }
             
-            // Handle commands from the Dht struct
+            // Handle commands and Swarm events
             tokio::select! {
-                Some((command, response_tx)) = command_rx.recv() => {
+                Some(command) = command_rx.recv() => {
                     match command {
-                        DhtCommand::Announce => {
-                            // TODO: Implement announce using Swarm
-                            // For now, just send success
-                            let _ = response_tx.send(DhtResponse::AnnounceComplete);
+                        DhtCommand::Announce { response_tx } => {
+                            // Implement announce using Swarm
+                            let key = info_hash_to_key(&info_hash);
+                            
+                            // Create a record with peer information
+                            // For BitTorrent DHT, we store peer addresses for the info hash
+                            // Get our actual listening address if available
+                            let peer_data = format!("{}:{}", "0.0.0.0", port);
+                            let record = Record::new(key, peer_data.as_bytes().to_vec());
+                            
+                            // Put the record in the DHT
+                            match swarm.behaviour_mut().put_record(record, libp2p::kad::Quorum::One) {
+                                Ok(query_id) => {
+                                    debug!("DHT announce started with query ID: {:?}", query_id);
+                                    // Store query ID to track this announce and response channel
+                                    {
+                                        let mut query_map = query_id_to_info_hash.write().await;
+                                        query_map.insert(query_id, info_hash);
+                                    }
+                                    {
+                                        let mut response_map = query_id_to_response.write().await;
+                                        response_map.insert(query_id, response_tx);
+                                    }
+                                    // Response will be sent when the query completes via Swarm events
+                                }
+                                Err(e) => {
+                                    warn!("Failed to start DHT announce: {:?}", e);
+                                    let _ = response_tx.send(DhtResponse::Error(format!("Failed to start announce: {:?}", e)));
+                                }
+                            }
                         }
-                        DhtCommand::Lookup => {
-                            // TODO: Implement lookup using Swarm
-                            // For now, return cached peers
-                            let peers = discovered_peers.read().await.clone();
-                            let _ = response_tx.send(DhtResponse::LookupComplete(peers));
+                        DhtCommand::Lookup { response_tx } => {
+                            // Implement lookup using Swarm
+                            let key = info_hash_to_key(&info_hash);
+                            
+                            // Get records from the DHT
+                            // In libp2p 0.56, get_record returns QueryId directly, not a Result
+                            let query_id = swarm.behaviour_mut().get_record(key);
+                            debug!("DHT lookup started with query ID: {:?}", query_id);
+                            // Store query ID to track this lookup and response channel
+                            {
+                                let mut query_map = query_id_to_info_hash.write().await;
+                                query_map.insert(query_id, info_hash);
+                            }
+                            {
+                                let mut response_map = query_id_to_response.write().await;
+                                response_map.insert(query_id, response_tx);
+                            }
+                            // Response will be sent when the query completes via Swarm events
                         }
                         DhtCommand::Shutdown => {
                             break;
                         }
                     }
                 }
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                    // Poll Swarm for events periodically
-                    // TODO: Poll Swarm events here when Swarm is created
+                event = swarm.select_next_some() => {
+                    // Poll Swarm events
+                    match event {
+                        SwarmEvent::Behaviour(libp2p::kad::Event::OutboundQueryProgressed { id, result, .. }) => {
+                            // Check if we have a response channel for this query
+                            let response_tx = {
+                                let mut response_map = query_id_to_response.write().await;
+                                response_map.remove(&id)
+                            };
+                            
+                            match result {
+                                libp2p::kad::QueryResult::GetRecord(Ok(libp2p::kad::GetRecordOk::FoundRecord(record))) => {
+                                    // Found a record - parse it and add to discovered peers
+                                    if let Some((ip, port)) = parse_dht_record(&record.record.value) {
+                                        let mut peers = discovered_peers.write().await;
+                                        if !peers.contains(&(ip.clone(), port)) {
+                                            peers.push((ip.clone(), port));
+                                            debug!("DHT discovered peer: {}:{}", ip, port);
+                                            
+                                            // Send event
+                                            if let Some(ref tx) = event_tx {
+                                                let _ = tx.send(DhtEvent::PeerDiscovered(ip.clone(), port));
+                                            }
+                                            
+                                            // Send response if this was a lookup query
+                                            if let Some(tx) = response_tx {
+                                                let current_peers = peers.clone();
+                                                let _ = tx.send(DhtResponse::LookupComplete(current_peers));
+                                            }
+                                        }
+                                    }
+                                }
+                                libp2p::kad::QueryResult::PutRecord(Ok(_)) => {
+                                    // Record stored successfully
+                                    debug!("DHT record stored successfully");
+                                    if let Some(ref tx) = event_tx {
+                                        let _ = tx.send(DhtEvent::AnnounceComplete);
+                                    }
+                                    
+                                    // Send response if this was an announce query
+                                    if let Some(tx) = response_tx {
+                                        let _ = tx.send(DhtResponse::AnnounceComplete);
+                                    }
+                                }
+                                libp2p::kad::QueryResult::GetRecord(Ok(libp2p::kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. })) => {
+                                    // Lookup finished but no more records
+                                    debug!("DHT lookup finished");
+                                    
+                                    // Send response with current peers
+                                    if let Some(tx) = response_tx {
+                                        let peers = discovered_peers.read().await.clone();
+                                        let _ = tx.send(DhtResponse::LookupComplete(peers));
+                                    }
+                                }
+                                libp2p::kad::QueryResult::GetRecord(Err(e)) => {
+                                    warn!("DHT get record query error: {:?}", e);
+                                    
+                                    // Send error response
+                                    if let Some(tx) = response_tx {
+                                        let _ = tx.send(DhtResponse::Error(format!("Get record query failed: {:?}", e)));
+                                    }
+                                }
+                                libp2p::kad::QueryResult::PutRecord(Err(e)) => {
+                                    warn!("DHT query error: {:?}", e);
+                                    
+                                    // Send error response
+                                    if let Some(tx) = response_tx {
+                                        let _ = tx.send(DhtResponse::Error(format!("Query failed: {:?}", e)));
+                                    }
+                                }
+                                _ => {
+                                    debug!("DHT query result: {:?}", result);
+                                    
+                                    // Send response for other query types
+                                    if let Some(tx) = response_tx {
+                                        let peers = discovered_peers.read().await.clone();
+                                        let _ = tx.send(DhtResponse::LookupComplete(peers));
+                                    }
+                                }
+                            }
+                            
+                            // Clean up query tracking
+                            {
+                                let mut query_map = query_id_to_info_hash.write().await;
+                                query_map.remove(&id);
+                            }
+                        }
+                        SwarmEvent::NewListenAddr { address, .. } => {
+                            info!("DHT listening on new address: {}", address);
+                        }
+                        SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                            debug!("DHT connection established with peer: {}", peer_id);
+                        }
+                        SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                            debug!("DHT connection closed with peer: {}", peer_id);
+                        }
+                        _ => {
+                            // Handle other Swarm events as needed
+                        }
+                    }
                 }
             }
         }
@@ -208,7 +397,7 @@ impl Dht {
         let command_tx_guard = self.command_tx.read().await;
         if let Some(ref command_tx) = *command_tx_guard {
             let (response_tx, mut response_rx) = mpsc::unbounded_channel();
-            command_tx.send((DhtCommand::Announce, response_tx)).map_err(|_| {
+            command_tx.send(DhtCommand::Announce { response_tx }).map_err(|_| {
                 WebTorrentError::Discovery("DHT command channel closed".to_string())
             })?;
             
@@ -242,7 +431,7 @@ impl Dht {
         let command_tx_guard = self.command_tx.read().await;
         if let Some(ref command_tx) = *command_tx_guard {
             let (response_tx, mut response_rx) = mpsc::unbounded_channel();
-            command_tx.send((DhtCommand::Lookup, response_tx)).map_err(|_| {
+            command_tx.send(DhtCommand::Lookup { response_tx }).map_err(|_| {
                 WebTorrentError::Discovery("DHT command channel closed".to_string())
             })?;
             
@@ -350,8 +539,7 @@ impl Dht {
         {
             let command_tx_guard = self.command_tx.read().await;
             if let Some(ref command_tx) = *command_tx_guard {
-                let (response_tx, _response_rx) = mpsc::unbounded_channel();
-                let _ = command_tx.send((DhtCommand::Shutdown, response_tx));
+                let _ = command_tx.send(DhtCommand::Shutdown);
             }
         }
         

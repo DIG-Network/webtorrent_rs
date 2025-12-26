@@ -1,9 +1,10 @@
 use crate::error::{Result, WebTorrentError};
 use crate::dht::Dht;
+use crate::lsd::Lsd;
 use crate::tracker::TrackerClient;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, info, warn};
 use std::collections::HashSet;
 use hex;
 
@@ -17,6 +18,7 @@ pub struct Discovery {
     #[allow(dead_code)]
     port: u16,
     dht: Option<Arc<Dht>>,
+    lsd: Option<Arc<Lsd>>,
     trackers: Vec<Arc<TrackerClient>>,
     discovered_peers: Arc<RwLock<HashSet<String>>>, // "ip:port" format
     destroyed: Arc<RwLock<bool>>,
@@ -24,6 +26,8 @@ pub struct Discovery {
     lsd_enabled: bool,
     #[allow(dead_code)]
     pex_enabled: bool,
+    nat_traversal: Option<Arc<crate::nat::NatTraversal>>,
+    dht_port: u16,
 }
 
 impl Discovery {
@@ -36,8 +40,38 @@ impl Discovery {
         lsd_enabled: bool,
         pex_enabled: bool,
     ) -> Self {
+        Self::new_with_nat(
+            info_hash,
+            peer_id,
+            announce,
+            port,
+            dht_enabled,
+            lsd_enabled,
+            pex_enabled,
+            None,
+            0,
+        )
+    }
+    
+    pub fn new_with_nat(
+        info_hash: [u8; 20],
+        peer_id: [u8; 20],
+        announce: Vec<String>,
+        port: u16,
+        dht_enabled: bool,
+        lsd_enabled: bool,
+        pex_enabled: bool,
+        nat_traversal: Option<Arc<crate::nat::NatTraversal>>,
+        dht_port: u16,
+    ) -> Self {
         let dht = if dht_enabled {
-            Some(Arc::new(Dht::new(info_hash, peer_id, port)))
+            Some(Arc::new(Dht::new(info_hash, peer_id, dht_port)))
+        } else {
+            None
+        };
+
+        let lsd = if lsd_enabled {
+            Some(Arc::new(Lsd::new()))
         } else {
             None
         };
@@ -52,11 +86,14 @@ impl Discovery {
             announce,
             port,
             dht,
+            lsd,
             trackers,
             discovered_peers: Arc::new(RwLock::new(HashSet::new())),
             destroyed: Arc::new(RwLock::new(false)),
             lsd_enabled,
             pex_enabled,
+            nat_traversal,
+            dht_port,
         }
     }
 
@@ -69,7 +106,28 @@ impl Discovery {
         // Start DHT if enabled
         if let Some(ref dht) = self.dht {
             dht.start().await?;
+            
+            // Map DHT port via NAT traversal if enabled
+            if let Some(ref nat) = self.nat_traversal {
+                let dht_port = self.dht_port;
+                let nat_clone = Arc::clone(nat);
+                tokio::spawn(async move {
+                    // DHT uses UDP protocol
+                    if let Err(e) = nat_clone.map_port(dht_port, dht_port, "udp", "WebTorrent DHT").await {
+                        warn!("Failed to map DHT port {} via NAT traversal: {}", dht_port, e);
+                    } else {
+                        info!("Mapped DHT port {} via NAT traversal", dht_port);
+                    }
+                });
+            }
+            
             dht.announce().await?;
+        }
+
+        // Start LSD if enabled
+        if let Some(ref lsd) = self.lsd {
+            lsd.start(self.info_hash, self.port).await?;
+            info!("LSD (mDNS) started for info hash: {}", hex::encode(self.info_hash));
         }
 
         // Announce to all trackers and collect peers
@@ -143,6 +201,18 @@ impl Discovery {
             }
         }
 
+        // Lookup via LSD (mDNS)
+        if let Some(ref lsd) = self.lsd {
+            if let Ok(peers) = lsd.lookup_peers().await {
+                for (ip, port) in peers {
+                    all_peers.insert((ip.clone(), port));
+                    // Also add to discovered_peers set
+                    let mut discovered = self.discovered_peers.write().await;
+                    discovered.insert(format!("{}:{}", ip, port));
+                }
+            }
+        }
+
         // Lookup via trackers
         for tracker in &self.trackers {
             match tracker.announce(0, 0, 0, "started").await {
@@ -189,6 +259,10 @@ impl Discovery {
 
         if let Some(ref dht) = self.dht {
             dht.destroy().await?;
+        }
+
+        if let Some(ref lsd) = self.lsd {
+            lsd.destroy().await?;
         }
 
         self.discovered_peers.write().await.clear();

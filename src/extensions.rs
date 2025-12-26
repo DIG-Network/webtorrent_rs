@@ -59,9 +59,10 @@ impl UtMetadata {
 }
 
 /// ut_pex extension (Peer Exchange)
+#[derive(Clone)]
 pub struct UtPex {
-    added: Vec<(String, u16)>,
-    dropped: Vec<(String, u16)>,
+    pub(crate) added: Vec<(String, u16)>,
+    pub(crate) dropped: Vec<(String, u16)>,
 }
 
 impl UtPex {
@@ -94,25 +95,113 @@ impl UtPex {
     }
 
     pub fn encode(&self) -> Bytes {
-        // Encode peer list in compact format
+        // Encode peer list in compact format: [added_len][added_peers][dropped_len][dropped_peers]
         let mut buf = Vec::new();
+        
+        // Encode added peers
+        let added_count = self.added.len().min(0xFFFF) as u16;
+        buf.extend_from_slice(&added_count.to_be_bytes());
         for (ip, port) in &self.added {
             if let Ok(ip_bytes) = ip.parse::<std::net::Ipv4Addr>() {
                 buf.extend_from_slice(&ip_bytes.octets());
                 buf.extend_from_slice(&port.to_be_bytes());
             }
         }
+        
+        // Encode dropped peers
+        let dropped_count = self.dropped.len().min(0xFFFF) as u16;
+        buf.extend_from_slice(&dropped_count.to_be_bytes());
+        for (ip, port) in &self.dropped {
+            if let Ok(ip_bytes) = ip.parse::<std::net::Ipv4Addr>() {
+                buf.extend_from_slice(&ip_bytes.octets());
+                buf.extend_from_slice(&port.to_be_bytes());
+            }
+        }
+        
         Bytes::from(buf)
     }
 
     pub fn decode(data: &[u8]) -> Result<Vec<(String, u16)>> {
         let mut peers = Vec::new();
-        for chunk in data.chunks_exact(6) {
-            let ip = format!("{}.{}.{}.{}", chunk[0], chunk[1], chunk[2], chunk[3]);
-            let port = u16::from_be_bytes([chunk[4], chunk[5]]);
-            peers.push((ip, port));
+        // PEX data format: [added_peers][dropped_peers]
+        // Each peer is 6 bytes: 4 bytes IP + 2 bytes port
+        // First 2 bytes are length of added peers list
+        if data.len() < 2 {
+            return Ok(peers);
         }
+        
+        let added_len = u16::from_be_bytes([data[0], data[1]]) as usize;
+        let added_start = 2;
+        let added_end = added_start + (added_len * 6);
+        
+        if added_end <= data.len() {
+            for chunk in data[added_start..added_end].chunks_exact(6) {
+                let ip = format!("{}.{}.{}.{}", chunk[0], chunk[1], chunk[2], chunk[3]);
+                let port = u16::from_be_bytes([chunk[4], chunk[5]]);
+                peers.push((ip, port));
+            }
+        }
+        
+        // Decode dropped peers if present
+        if added_end < data.len() {
+            let dropped_start = added_end;
+            if dropped_start + 2 <= data.len() {
+                let dropped_len = u16::from_be_bytes([data[dropped_start], data[dropped_start + 1]]) as usize;
+                let dropped_end = dropped_start + 2 + (dropped_len * 6);
+                
+                if dropped_end <= data.len() {
+                    for chunk in data[dropped_start + 2..dropped_end].chunks_exact(6) {
+                        let _ip = format!("{}.{}.{}.{}", chunk[0], chunk[1], chunk[2], chunk[3]);
+                        let _port = u16::from_be_bytes([chunk[4], chunk[5]]);
+                        // Store dropped peers separately if needed
+                        // For now, we just decode them (dropped peers are handled in decode_full)
+                    }
+                }
+            }
+        }
+        
         Ok(peers)
+    }
+    
+    /// Decode PEX message with both added and dropped peers
+    pub fn decode_full(data: &[u8]) -> Result<(Vec<(String, u16)>, Vec<(String, u16)>)> {
+        let mut added = Vec::new();
+        let mut dropped = Vec::new();
+        
+        if data.len() < 2 {
+            return Ok((added, dropped));
+        }
+        
+        let added_len = u16::from_be_bytes([data[0], data[1]]) as usize;
+        let added_start = 2;
+        let added_end = added_start + (added_len * 6);
+        
+        if added_end <= data.len() {
+            for chunk in data[added_start..added_end].chunks_exact(6) {
+                let ip = format!("{}.{}.{}.{}", chunk[0], chunk[1], chunk[2], chunk[3]);
+                let port = u16::from_be_bytes([chunk[4], chunk[5]]);
+                added.push((ip, port));
+            }
+        }
+        
+        // Decode dropped peers
+        if added_end < data.len() {
+            let dropped_start = added_end;
+            if dropped_start + 2 <= data.len() {
+                let dropped_len = u16::from_be_bytes([data[dropped_start], data[dropped_start + 1]]) as usize;
+                let dropped_end = dropped_start + 2 + (dropped_len * 6);
+                
+                if dropped_end <= data.len() {
+                    for chunk in data[dropped_start + 2..dropped_end].chunks_exact(6) {
+                        let ip = format!("{}.{}.{}.{}", chunk[0], chunk[1], chunk[2], chunk[3]);
+                        let port = u16::from_be_bytes([chunk[4], chunk[5]]);
+                        dropped.push((ip, port));
+                    }
+                }
+            }
+        }
+        
+        Ok((added, dropped))
     }
 }
 

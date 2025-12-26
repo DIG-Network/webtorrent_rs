@@ -13,7 +13,7 @@ tokio = { version = "1.35", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 
 # Networking
-libp2p = { version = "0.56", features = ["tcp", "dns", "noise", "yamux", "websocket", "kad", "mdns", "identify", "ping"] }
+libp2p = { version = "0.56.0", features = ["tokio", "tcp", "dns", "noise", "yamux", "websocket", "kad", "mdns", "identify", "ping"] }
 # Note: WebRTC and QUIC are optional for now - can be added later if needed
 # Only stable releases are used - no prereleases (alpha/beta/rc)
 # libp2p-webrtc = "0.x"  # Will be added when stable release is available
@@ -102,4 +102,288 @@ path = "examples/test_download.rs"
 [[example]]
 name = "test_seed_and_download"
 path = "examples/test_seed_and_download.rs"
+
+[[example]]
+name = "test_add_data"
+path = "examples/test_add_data.rs"
+
+[[example]]
+name = "test_add_duplicate"
+path = "examples/test_add_duplicate.rs"
+
+[[example]]
+name = "test_add_info_hash"
+path = "examples/test_add_info_hash.rs"
+
+[[example]]
+name = "test_add_invalid_magnet"
+path = "examples/test_add_invalid_magnet.rs"
+
+[[example]]
+name = "test_add_invalid_torrent"
+path = "examples/test_add_invalid_torrent.rs"
+
+[[example]]
+name = "test_add_magnet_uri"
+path = "examples/test_add_magnet_uri.rs"
+
+[[example]]
+name = "test_add_multiple_concurrent"
+path = "examples/test_add_multiple_concurrent.rs"
+
+[[example]]
+name = "test_add_torrent_file"
+path = "examples/test_add_torrent_file.rs"
+
+[[example]]
+name = "test_add_url"
+path = "examples/test_add_url.rs"
+
+[[example]]
+name = "test_blocklist_add_ip_v4"
+path = "examples/test_blocklist_add_ip_v4.rs"
+
+[[example]]
+name = "test_blocklist_is_blocked"
+path = "examples/test_blocklist_is_blocked.rs"
+
+[[example]]
+name = "test_blocklist_new"
+path = "examples/test_blocklist_new.rs"
+
+[[example]]
+name = "test_client_all_features"
+path = "examples/test_client_all_features.rs"
+
+[[example]]
+name = "test_client_blocklist"
+path = "examples/test_client_blocklist.rs"
+
+[[example]]
+name = "test_client_custom_peer_id"
+path = "examples/test_client_custom_peer_id.rs"
+
+[[example]]
+name = "test_client_custom_port"
+path = "examples/test_client_custom_port.rs"
+
+[[example]]
+name = "test_client_default"
+path = "examples/test_client_default.rs"
+
+[[example]]
+name = "test_client_multiple_instances"
+path = "examples/test_client_multiple_instances.rs"
+
+[[example]]
+name = "test_client_no_features"
+path = "examples/test_client_no_features.rs"
+
+[[example]]
+name = "test_client_throttling"
+path = "examples/test_client_throttling.rs"
+
+[[example]]
+name = "test_client_tracker_config"
+path = "examples/test_client_tracker_config.rs"
+
+[[example]]
+name = "test_creator_announce"
+path = "examples/test_creator_announce.rs"
+
+[[example]]
+name = "test_creator_chained"
+path = "examples/test_creator_chained.rs"
+
+[[example]]
+name = "test_creator_comment"
+path = "examples/test_creator_comment.rs"
+
+[[example]]
+name = "test_creator_default"
+path = "examples/test_creator_default.rs"
+
+[[example]]
+name = "test_creator_empty_file"
+path = "examples/test_creator_empty_file.rs"
+
+[[example]]
+name = "test_creator_from_path"
+path = "examples/test_creator_from_path.rs"
+
+[[example]]
+name = "test_creator_from_path_missing"
+path = "examples/test_creator_from_path_missing.rs"
+
+[[example]]
+name = "test_creator_large_file"
+path = "examples/test_creator_large_file.rs"
+
+[[example]]
+name = "test_creator_piece_length"
+path = "examples/test_creator_piece_length.rs"
+
+[[example]]
+name = "test_creator_small_file"
+path = "examples/test_creator_small_file.rs"
+
+[[example]]
+name = "test_download_torrent_file"
+path = "examples/test_download_torrent_file.rs"
+
+[[example]]
+name = "test_e2e_seed_download"
+path = "examples/test_e2e_seed_download.rs"
+
+[[example]]
+name = "test_edge_single_piece"
+path = "examples/test_edge_single_piece.rs"
+
+[[example]]
+name = "test_edge_zero_byte_file"
+path = "examples/test_edge_zero_byte_file.rs"
+
+[[example]]
+name = "test_error_invalid_torrent"
+path = "examples/test_error_invalid_torrent.rs"
+
+[[example]]
+name = "test_file_selection_critical"
+path = "examples/test_file_selection_critical.rs"
+
+[[example]]
+name = "test_file_selection_deselect"
+path = "examples/test_file_selection_deselect.rs"
+
+[[example]]
+name = "test_file_selection_get_priority"
+path = "examples/test_file_selection_get_priority.rs"
+
+[[example]]
+name = "test_file_selection_get_selected"
+path = "examples/test_file_selection_get_selected.rs"
+
+[[example]]
+name = "test_file_selection_is_selected"
+path = "examples/test_file_selection_is_selected.rs"
+
+[[example]]
+name = "test_file_selection_multiple"
+path = "examples/test_file_selection_multiple.rs"
+
+[[example]]
+name = "test_file_selection_priority"
+path = "examples/test_file_selection_priority.rs"
+
+[[example]]
+name = "test_file_selection_single"
+path = "examples/test_file_selection_single.rs"
+
+[[example]]
+name = "test_file_selection_single_file_torrent"
+path = "examples/test_file_selection_single_file_torrent.rs"
+
+[[example]]
+name = "test_runner"
+path = "examples/test_runner.rs"
+
+[[example]]
+name = "test_seed_single_file"
+path = "examples/test_seed_single_file.rs"
+
+[[example]]
+name = "test_speed_both"
+path = "examples/test_speed_both.rs"
+
+[[example]]
+name = "test_speed_download"
+path = "examples/test_speed_download.rs"
+
+[[example]]
+name = "test_speed_idle"
+path = "examples/test_speed_idle.rs"
+
+[[example]]
+name = "test_speed_throttled"
+path = "examples/test_speed_throttled.rs"
+
+[[example]]
+name = "test_speed_upload"
+path = "examples/test_speed_upload.rs"
+
+[[example]]
+name = "test_stream_concurrent"
+path = "examples/test_stream_concurrent.rs"
+
+[[example]]
+name = "test_stream_create"
+path = "examples/test_stream_create.rs"
+
+[[example]]
+name = "test_stream_destroy"
+path = "examples/test_stream_destroy.rs"
+
+[[example]]
+name = "test_stream_eof"
+path = "examples/test_stream_eof.rs"
+
+[[example]]
+name = "test_stream_invalid_file_index"
+path = "examples/test_stream_invalid_file_index.rs"
+
+[[example]]
+name = "test_stream_multi_file"
+path = "examples/test_stream_multi_file.rs"
+
+[[example]]
+name = "test_stream_position"
+path = "examples/test_stream_position.rs"
+
+[[example]]
+name = "test_stream_seek_simulation"
+path = "examples/test_stream_seek_simulation.rs"
+
+[[example]]
+name = "test_torrent_bitfield"
+path = "examples/test_torrent_bitfield.rs"
+
+[[example]]
+name = "test_torrent_destroy"
+path = "examples/test_torrent_destroy.rs"
+
+[[example]]
+name = "test_torrent_metadata_access"
+path = "examples/test_torrent_metadata_access.rs"
+
+[[example]]
+name = "test_torrent_peer_count"
+path = "examples/test_torrent_peer_count.rs"
+
+[[example]]
+name = "test_torrent_progress_tracking"
+path = "examples/test_torrent_progress_tracking.rs"
+
+[[example]]
+name = "test_torrent_ready_state"
+path = "examples/test_torrent_ready_state.rs"
+
+[[example]]
+name = "test_torrent_start_discovery"
+path = "examples/test_torrent_start_discovery.rs"
+
+[[example]]
+name = "test_torrent_store_access"
+path = "examples/test_torrent_store_access.rs"
+
+[[example]]
+name = "test_tracker_announce_started"
+path = "examples/test_tracker_announce_started.rs"
+
+[[example]]
+name = "test_tracker_new"
+path = "examples/test_tracker_new.rs"
+
+[[example]]
+name = "test_utils"
+path = "examples/test_utils.rs"
 
